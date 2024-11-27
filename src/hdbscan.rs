@@ -1130,9 +1130,10 @@ mod test {
 
     #[test]
     fn outlier_scores() {
-        use crate::Fit;
         use ndarray::array;
         use petal_neighbors::distance::Euclidean;
+
+        use crate::Fit;
 
         let data = array![
             // cluster1:
