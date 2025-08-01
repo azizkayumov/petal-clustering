@@ -505,58 +505,69 @@ mod test {
         use crate::Fit;
 
         let data = array![
-            // cluster1:
-            [1., 1.],
-            [1., 2.],
-            [2., 1.],
-            [2., 2.],
-            // cluster2:
-            [4., 1.],
-            [4., 2.],
-            [5., 1.],
+            // Cluster A (formed at eps = √2)
+            [2., 9.],
+            [3., 9.],
+            [2., 8.],
+            [3., 8.],
+            [2., 7.],
+            [3., 7.],
+            [1., 8.],
+            [4., 8.],
+            // Cluster B (formed at eps = √8)
+            [7., 9.],
+            [7., 8.],
+            [8., 8.],
+            [8., 7.],
+            [9., 7.],
+            // Cluster C (formed at eps = 2)
+            [6., 3.],
             [5., 2.],
-            // cluster3:
-            [9., 1.],
-            [9., 2.],
-            [10., 1.],
-            [10., 2.],
-            [11., 1.],
-            [11., 2.],
-            // outlier1:
-            [2., 5.],
-            // outlier2:
-            [10., 8.],
+            [6., 2.],
+            [7., 2.],
+            [6., 1.],
+            // Outliers:
+            [8., 4.], // outlier1 (joins the root cluster at eps = 3.0)
+            [3., 3.], // outlier2 (joins the root cluster at eps = √13)
         ];
         let mut hdbscan = super::HDbscan {
             alpha: 1.,
-            min_samples: 4,
-            min_cluster_size: 4,
+            min_samples: 5,
+            min_cluster_size: 5,
             metric: Euclidean::default(),
-            boruvka: false,
+            boruvka: true,
         };
         let (_, _, outlier_scores) = hdbscan.fit(&data, None);
 
-        // The first 14 data objects immediately form their clusters at eps = √2
-        // The outlier scores of these objects are all 0:
-        //      glosh(x) = 1 - √2 / √2 = 0
-        for i in 0..14 {
-            assert_eq!(outlier_scores[i], 0.0);
-        }
-
-        // Outlier1 joins the cluster C = {cluster1 ∪ cluster2} at:
-        //      eps_outlier1 = √13
-        // The lowest eps that C or any of its child clusters survives w.r.t. min_cluster_size = 4 is:
-        //      eps_C = √2 (due to cluster1 or cluster2)
+        // Outlier1 joins the root cluster at:
+        //      eps_outlier1 = 3.0
+        // The lowest eps that the root or any of its child clusters survive w.r.t. min_cluster_size = 5 is:
+        //      eps_Root = √2
         // Then the outlier score of outlier1 is:
-        //      glosh(outlier1) =  1 - √2 / √13 = 0.60776772972
-        assert_eq!(outlier_scores[14], 1.0 - 2.0_f64.sqrt() / 13.0_f64.sqrt());
+        //      glosh(outlier1) =  1 - √2 / 3.0 = 0.53
+        let expected = 1.0 - 2.0_f64.sqrt() / 3.0_f64;
+        let actual = outlier_scores[18];
+        assert!(
+            (actual - expected).abs() < f64::EPSILON,
+            "Expected: {}, got: {}",
+            expected,
+            actual
+        );
 
-        // Outlier2 joins the root cluster at at eps = √37
-        // The lowest eps that the root cluster survives w.r.t. min_cluster_size = 4 is:
+        // Outlier2 joins the root cluster at:
+        //      eps_outlier2 = √13
+        // The lowest eps that the root or any of its child clusters survive w.r.t. min_cluster_size = 4 is:
         //      eps_root = √2
         // Then the outlier score of outlier2 is:
-        //      glosh(outlier2) =  1 - √2 / √37 = 0.76750472251
-        assert_eq!(outlier_scores[15], 1.0 - 2.0_f64.sqrt() / 37.0_f64.sqrt());
+        //      glosh(outlier2) =  1 - √2 / √13 = 0.61
+        let expected = 1.0 - 2.0_f64.sqrt() / 13.0_f64.sqrt();
+        let actual = outlier_scores[19];
+        assert!(
+            (actual - expected).abs() < f64::EPSILON,
+            "Expected: {}, got: {}",
+            expected,
+            actual
+        );
     }
 
     #[test]
