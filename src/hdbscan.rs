@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::ops::{AddAssign, DivAssign, Sub};
 
+use itertools::Itertools;
 use ndarray::{Array1, ArrayBase, ArrayView1, Data, Ix2};
 use num_traits::{float::FloatCore, FromPrimitive};
 use petal_neighbors::distance::{Euclidean, Metric};
@@ -10,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use super::Fit;
 use crate::mst::{condense_mst, mst_linkage, Boruvka};
-use crate::union_find::UnionFind;
+use crate::union_find::TreeUnionFind;
 
 /// HDBSCAN (hierarchical density-based spatial clustering of applications with noise)
 /// clustering algorithm.
@@ -101,7 +102,7 @@ impl<S, A, M>
         (HashMap<usize, Vec<usize>>, Vec<usize>, Vec<A>),
     > for HDbscan<A, M>
 where
-    A: AddAssign + DivAssign + FloatCore + FromPrimitive + Sync + Send,
+    A: AddAssign + DivAssign + FloatCore + FromPrimitive + Sync + Send + Debug,
     S: Data<Elem = A>,
     M: Metric<A> + Clone + Sync + Send,
 {
@@ -143,9 +144,8 @@ where
         };
 
         mst.sort_unstable_by(|a, b| a.2.partial_cmp(&(b.2)).expect("invalid distance"));
-        let sorted_mst = Array1::from_vec(mst);
-        let labeled = label(sorted_mst);
-        let condensed = condense_mst(labeled.view(), self.min_cluster_size);
+        let labeled = label(mst);
+        let condensed = condense_mst(labeled, self.min_cluster_size);
         let outlier_scores = glosh(&condensed, self.min_cluster_size);
         let (clusters, outliers) =
             find_clusters(&Array1::from_vec(condensed).view(), partial_labels);
@@ -153,16 +153,46 @@ where
     }
 }
 
-fn label<A: FloatCore>(mst: Array1<(usize, usize, A)>) -> Array1<(usize, usize, A, usize)> {
+fn label<A: FloatCore + Debug>(mst: Vec<(usize, usize, A)>) -> Vec<(usize, usize, A, usize)> {
     let n = mst.len() + 1;
-    let mut uf = UnionFind::new(n);
-    mst.into_iter()
-        .map(|(mut a, mut b, delta)| {
-            a = uf.fast_find(a);
-            b = uf.fast_find(b);
-            (a, b, delta, uf.union(a, b))
-        })
-        .collect()
+    let mut result: Vec<(usize, usize, A, usize)> = Vec::with_capacity(2 * n);
+    let mut next_label = n;
+    let mut label = (0..2 * n).collect::<Vec<_>>(); // labels of subtrees
+    let mut sizes = [vec![1; n], vec![0; n]].concat(); // sizes of subtrees
+    let mut uf = TreeUnionFind::new(n);
+
+    // HDBSCAN merges subtrees in the order of eps (distance)
+    // where ties in eps should be merged at the same time:
+    for (eps, edges) in &mst.iter().chunk_by(|(_, _, eps)| *eps) {
+        let edges = edges.collect::<Vec<_>>();
+
+        // Collect unique subtree roots (children)
+        let children = edges
+            .iter()
+            .flat_map(|(u, v, _)| [uf.find(*u), uf.find(*v)])
+            .unique()
+            .collect::<Vec<_>>();
+
+        // Merge the subtrees
+        for (u, v, _) in edges {
+            uf.union(*u, *v);
+        }
+
+        // Assign parent-child labels
+        let mut level: HashMap<usize, usize> = HashMap::new();
+        for child in children {
+            let parent = uf.find(child);
+            let parent_label = level.entry(parent).or_insert_with(|| {
+                next_label += 1;
+                next_label - 1
+            });
+            let child_label = label[child];
+            result.push((*parent_label, child_label, eps, sizes[child_label]));
+            sizes[*parent_label] += sizes[child_label];
+            label[child] = *parent_label;
+        }
+    }
+    result
 }
 
 fn get_stability<A: FloatCore + FromPrimitive + AddAssign + Sub>(
@@ -644,26 +674,38 @@ mod test {
 
     #[test]
     fn label() {
-        use ndarray::arr1;
-        let mst = arr1(&[
-            (0, 3, 5.),
-            (4, 2, 5.),
-            (3, 5, 6.),
-            (0, 1, 7.),
-            (1, 4, 7.),
-            (4, 6, 9.),
-        ]);
+        let mst = vec![
+            (0, 1, 4.),
+            (2, 3, 4.),
+            (4, 5, 4.),
+            (1, 2, 7.), // <-- this (having eps = 7.0)
+            (3, 4, 7.), // <-- and this should have the same parent label
+            (5, 6, 8.),
+        ];
+        // Resulting labels should be:
+        //            11
+        //           /  \        <-- eps = 8.0
+        //          10   6
+        //         / | \         <-- eps = 7.0
+        //        7  8  9
+        //       /|  |\  |\      <-- eps = 4.0
+        //      0 1  2 3 4 5
         let labeled_mst = super::label(mst);
         assert_eq!(
             labeled_mst,
-            arr1(&[
-                (0, 3, 5., 2),
-                (4, 2, 5., 2),
-                (7, 5, 6., 3),
-                (9, 1, 7., 4),
-                (10, 8, 7., 6),
-                (11, 6, 9., 7)
-            ])
+            vec![
+                (7, 0, 4., 1),
+                (7, 1, 4., 1),
+                (8, 2, 4., 1),
+                (8, 3, 4., 1),
+                (9, 4, 4., 1),
+                (9, 5, 4., 1),
+                (10, 7, 7., 2),
+                (10, 8, 7., 2),
+                (10, 9, 7., 2),
+                (11, 10, 8., 6),
+                (11, 6, 8., 1),
+            ]
         );
     }
 

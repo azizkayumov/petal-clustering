@@ -1,7 +1,9 @@
 use std::convert::TryFrom;
+use std::fmt::Debug;
 use std::mem::MaybeUninit;
 use std::ops::{AddAssign, Div, DivAssign};
 
+use itertools::Itertools;
 use ndarray::{Array1, ArrayView1, ArrayView2};
 use num_traits::{float::FloatCore, FromPrimitive};
 use petal_neighbors::distance::Metric;
@@ -99,113 +101,39 @@ pub fn mst_linkage<A: FloatCore>(
     unsafe { mst.assume_init() }
 }
 
-fn bfs_mst<A: FloatCore>(mst: ArrayView1<(usize, usize, A, usize)>, start: usize) -> Vec<usize> {
-    let n = mst.len() + 1;
-
-    let mut to_process = vec![start];
-    let mut result = vec![];
-
-    while !to_process.is_empty() {
-        result.extend_from_slice(to_process.as_slice());
-        to_process = to_process
-            .into_iter()
-            .filter_map(|x| {
-                if x >= n {
-                    Some(vec![mst[x - n].0, mst[x - n].1].into_iter())
-                } else {
-                    None
-                }
-            })
-            .flatten()
-            .collect();
-    }
-    result
-}
-
-pub fn condense_mst<A: FloatCore + Div>(
-    mst: ArrayView1<(usize, usize, A, usize)>,
+pub fn condense_mst<A: FloatCore + Div + Debug>(
+    mst: Vec<(usize, usize, A, usize)>,
     min_cluster_size: usize,
 ) -> Vec<(usize, usize, A, usize)> {
-    let root = mst.len() * 2;
-    let n = mst.len() + 1;
-
-    let mut relabel = Array1::<usize>::uninit(root + 1);
-    relabel[root] = MaybeUninit::new(n);
-    let mut next_label = n + 1;
-    let mut ignore = vec![false; root + 1];
-    let mut result = Vec::new();
-
-    let bsf = bfs_mst(mst, root);
-    for node in bsf {
-        if node < n {
-            continue;
-        }
-        if ignore[node] {
-            continue;
-        }
-        let info = mst[node - n];
-        let lambda = if info.2 > A::zero() {
-            A::one() / info.2
+    println!("\nMST (minClSize = {min_cluster_size}):");
+    let chars = "abcdefghijklmnopqrst".chars().collect::<Vec<_>>();
+    for (parent, child, eps, child_size) in mst.iter() {
+        let child = if *child < chars.len() {
+            chars[*child].to_string()
         } else {
-            A::max_value()
+            format!("{}", *child)
         };
-        let left = info.0;
-        let left_count = if left < n { 1 } else { mst[left - n].3 };
-
-        let right = info.1;
-        let right_count = if right < n { 1 } else { mst[right - n].3 };
-
-        match (
-            left_count >= min_cluster_size,
-            right_count >= min_cluster_size,
-        ) {
-            (true, true) => {
-                relabel[left] = MaybeUninit::new(next_label);
-                result.push((
-                    unsafe { relabel[node].assume_init() },
-                    next_label,
-                    lambda,
-                    left_count,
-                ));
-                next_label += 1;
-
-                relabel[right] = MaybeUninit::new(next_label);
-                result.push((
-                    unsafe { relabel[node].assume_init() },
-                    next_label,
-                    lambda,
-                    right_count,
-                ));
-                next_label += 1;
-            }
-            (true, false) => {
-                relabel[left] = relabel[node];
-                for child in bfs_mst(mst, right) {
-                    if child < n {
-                        result.push((unsafe { relabel[node].assume_init() }, child, lambda, 1));
-                    }
-                    ignore[child] = true;
-                }
-            }
-            (false, true) => {
-                relabel[right] = relabel[node];
-                for child in bfs_mst(mst, left) {
-                    if child < n {
-                        result.push((unsafe { relabel[node].assume_init() }, child, lambda, 1));
-                    }
-                    ignore[child] = true;
-                }
-            }
-            (false, false) => {
-                for child in bfs_mst(mst, node).into_iter().skip(1) {
-                    if child < n {
-                        result.push((unsafe { relabel[node].assume_init() }, child, lambda, 1));
-                    }
-                    ignore[child] = true;
-                }
-            }
-        }
+        println!("{}, {}, {:.2?}, {}", *parent, child, eps, child_size);
     }
+
+    let result: Vec<(usize, usize, A, usize)> = Vec::new();
+    let mut next_label: usize = 0;
+    let mut relabel = vec![next_label; mst.len() + 1]; // every node has the root label
+
+    for (parent, edges) in &mst.iter().rev().chunk_by(|(parent, _, _, _)| *parent) {
+        // This is how we do it in Puerto Rico
+    }
+
+    println!("\nCondensedMST (minClSize = {min_cluster_size}):");
+    for (parent, child, eps, child_size) in result.iter() {
+        let child = if *child < chars.len() {
+            chars[*child].to_string()
+        } else {
+            format!("{}", *child)
+        };
+        println!("{} - {} - {:.2?} - {}", *parent, child, eps, child_size);
+    }
+
     result
 }
 
@@ -586,52 +514,59 @@ impl Components {
 mod test {
 
     #[test]
-    fn bfs_mst() {
-        use ndarray::arr1;
-        let mst = arr1(&[
-            (0, 3, 5., 2),
-            (4, 2, 5., 2),
-            (7, 5, 6., 3),
-            (9, 1, 7., 4),
-            (10, 8, 7., 6),
-            (11, 6, 9., 7),
-        ]);
-        let root = mst.len() * 2;
-        let bfs = super::bfs_mst(mst.view(), root);
-        assert_eq!(bfs, [12, 11, 6, 10, 8, 9, 1, 4, 2, 7, 5, 0, 3]);
-
-        let bfs = super::bfs_mst(mst.view(), 11);
-        assert_eq!(bfs, vec![11, 10, 8, 9, 1, 4, 2, 7, 5, 0, 3]);
-
-        let bfs = super::bfs_mst(mst.view(), 8);
-        assert_eq!(bfs, vec![8, 4, 2]);
-    }
-
-    #[test]
     fn condense_mst() {
-        use ndarray::arr1;
+        // Given the following hierarchy of 7 points:
+        //             14
+        //           /    \
+        //         13       12
+        //        /  \      / \
+        //       11   9    10  7
+        //       /|   |\   |\
+        //      8 2   3 4  5 6
+        //     /|
+        //    0 1
 
-        let mst = arr1(&[
-            (0, 3, 5., 2),
-            (4, 2, 5., 2),
-            (7, 5, 6., 3),
-            (9, 1, 7., 4),
-            (10, 8, 7., 6),
-            (11, 6, 9., 7),
-        ]);
+        let mst = vec![
+            (8, 0, 4., 1),
+            (8, 1, 4., 1),
+            (9, 3, 4., 1),
+            (9, 4, 4., 1),
+            (10, 5, 4., 1),
+            (10, 6, 4., 1),
+            (11, 8, 5., 2),
+            (11, 2, 5., 1),
+            (12, 10, 6., 2),
+            (12, 7, 6., 1),
+            (13, 11, 7., 3),
+            (13, 9, 7., 2),
+            (14, 13, 9., 4),
+            (14, 12, 9., 3),
+        ];
+        let min_cluster_size = 3;
 
-        let condensed_mst = super::condense_mst(mst.view(), 3);
+        // Condense the MST based on the minimum cluster size = 3 should yield:
+        //              8
+        //           /    \
+        //         10       9
+        //        / \\     /|\
+        //       10 3 4   5 6 7
+        //      /|\
+        //     0 1 2
+        let condensed = super::condense_mst(mst, min_cluster_size);
         assert_eq!(
-            condensed_mst,
+            condensed,
             vec![
-                (7, 6, 1. / 9., 1),
-                (7, 4, 1. / 7., 1),
-                (7, 2, 1. / 7., 1),
-                (7, 1, 1. / 7., 1),
-                (7, 5, 1. / 6., 1),
-                (7, 0, 1. / 6., 1),
-                (7, 3, 1. / 6., 1)
-            ],
+                (8, 10, 1. / 9., 5),
+                (8, 9, 1. / 9., 3),
+                (10, 4, 1. / 7., 1),
+                (10, 3, 1. / 7., 1),
+                (9, 7, 1. / 6., 1),
+                (9, 5, 1. / 6., 1),
+                (9, 6, 1. / 6., 1),
+                (10, 2, 1. / 5., 1),
+                (10, 1, 1. / 5., 1),
+                (10, 0, 1. / 5., 1),
+            ]
         );
     }
 
