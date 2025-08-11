@@ -106,31 +106,80 @@ pub fn condense_mst<A: FloatCore + Div + Debug>(
     min_cluster_size: usize,
 ) -> Vec<(usize, usize, A, usize)> {
     println!("\nMST (minClSize = {min_cluster_size}):");
-    let chars = "abcdefghijklmnopqrst".chars().collect::<Vec<_>>();
     for (parent, child, eps, child_size) in mst.iter() {
-        let child = if *child < chars.len() {
-            chars[*child].to_string()
-        } else {
-            format!("{}", *child)
-        };
         println!("{}, {}, {:.2?}, {}", *parent, child, eps, child_size);
     }
 
-    let result: Vec<(usize, usize, A, usize)> = Vec::new();
-    let mut next_label: usize = 0;
-    let mut relabel = vec![next_label; mst.len() + 1]; // every node has the root label
+    // min_parent gives the number of points in the hierarchy
+    let n = mst
+        .iter()
+        .map(|(parent, _, _, _)| *parent)
+        .min()
+        .map_or(0, |min_parent| min_parent);
 
+    let mut result: Vec<(usize, usize, A, usize)> = Vec::new();
+
+    // Start with every node having the root label
+    let mut relabel = vec![n; mst.len() + 1];
+    let mut relevel = vec![A::max_value(); mst.len() + 1];
+    let mut next_label: usize = n + 1;
+
+    // Top down pass to relabel the nodes w.r.t. the minimum cluster size
     for (parent, edges) in &mst.iter().rev().chunk_by(|(parent, _, _, _)| *parent) {
-        // This is how we do it in Puerto Rico
+        let edges = edges.collect::<Vec<_>>();
+
+        let num_new_clusters = edges
+            .iter()
+            .filter(|(_, _, _, child_size)| *child_size >= min_cluster_size)
+            .count();
+
+        println!(
+            "Parent: {}, num_new_clusters: {}, edges: {:?}",
+            parent, num_new_clusters, edges
+        );
+
+        // Assigning new labels to the children based on the minimum cluster size
+        if num_new_clusters > 1 {
+            // If there are more than one cluster, parent cluster is splitting,
+            // so we need to assign new labels to the children:
+            for (parent, child, eps, child_size) in &edges {
+                relevel[*child] = *eps;
+                if *child_size >= min_cluster_size {
+                    relabel[*child] = next_label;
+                    next_label += 1;
+                } else {
+                    relabel[*child] = relabel[*parent];
+                }
+            }
+        } else {
+            // If there is only one cluster, parent cluster is shrinking,
+            // so we keep the parent's label for all children:
+            for (parent, child, _, _) in &edges {
+                relabel[*child] = relabel[*parent];
+                relevel[*child] = relevel[*parent];
+            }
+        }
+
+        // Add the edges to the result with the new labels:
+        for (parent, child, _, child_size) in edges {
+            let lambda = if relevel[*child] > A::zero() {
+                A::one() / relevel[*child]
+            } else {
+                A::max_value()
+            };
+            if *child_size == 1 {
+                result.push((relabel[*parent], *child, lambda, *child_size));
+            } else if relabel[*child] != relabel[*parent] {
+                result.push((relabel[*parent], relabel[*child], lambda, *child_size));
+            }
+        }
+
+        println!("Relabeling: {:?}", relabel);
+        println!("Releveling: {:?}\n", relevel);
     }
 
     println!("\nCondensedMST (minClSize = {min_cluster_size}):");
     for (parent, child, eps, child_size) in result.iter() {
-        let child = if *child < chars.len() {
-            chars[*child].to_string()
-        } else {
-            format!("{}", *child)
-        };
         println!("{} - {} - {:.2?} - {}", *parent, child, eps, child_size);
     }
 
@@ -539,12 +588,12 @@ mod test {
             (12, 7, 6., 1),
             (13, 11, 7., 3),
             (13, 9, 7., 2),
-            (14, 13, 9., 4),
+            (14, 13, 9., 5),
             (14, 12, 9., 3),
         ];
         let min_cluster_size = 3;
 
-        // Condense the MST based on the minimum cluster size = 3 should yield:
+        // Condense the MST based on the minimum cluster size = 3:
         //              8
         //           /    \
         //         10       9
@@ -556,8 +605,8 @@ mod test {
         assert_eq!(
             condensed,
             vec![
-                (8, 10, 1. / 9., 5),
                 (8, 9, 1. / 9., 3),
+                (8, 10, 1. / 9., 5),
                 (10, 4, 1. / 7., 1),
                 (10, 3, 1. / 7., 1),
                 (9, 7, 1. / 6., 1),
