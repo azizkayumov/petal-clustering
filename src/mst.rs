@@ -117,14 +117,22 @@ pub fn condense_mst<A: FloatCore + Div + Debug>(
         .min()
         .map_or(0, |min_parent| min_parent);
 
+    // max_parent gives the number of clusters in the hierarchy
+    let max_parent = mst
+        .iter()
+        .map(|(parent, _, _, _)| *parent)
+        .max()
+        .map_or(0, |max_parent| max_parent);
+
     let mut result: Vec<(usize, usize, A, usize)> = Vec::new();
 
     // Start with every node having the root label
-    let mut relabel = vec![n; mst.len() + 1];
-    let mut relevel = vec![A::max_value(); mst.len() + 1];
-    let mut next_label: usize = n + 1;
+    let mut label = vec![n; max_parent + 1];
+    // Keep the minimum density level of cluster formations
+    let mut lambda = vec![A::max_value(); max_parent + 1];
 
     // Top down pass to relabel the nodes w.r.t. the minimum cluster size
+    let mut next_label: usize = n + 1;
     for (parent, edges) in &mst.iter().rev().chunk_by(|(parent, _, _, _)| *parent) {
         let edges = edges.collect::<Vec<_>>();
 
@@ -133,49 +141,59 @@ pub fn condense_mst<A: FloatCore + Div + Debug>(
             .filter(|(_, _, _, child_size)| *child_size >= min_cluster_size)
             .count();
 
-        println!(
-            "Parent: {}, num_new_clusters: {}, edges: {:?}",
-            parent, num_new_clusters, edges
-        );
-
         // Assigning new labels to the children based on the minimum cluster size
         if num_new_clusters > 1 {
             // If there are more than one cluster, parent cluster is splitting,
             // so we need to assign new labels to the children:
-            for (parent, child, eps, child_size) in &edges {
-                relevel[*child] = *eps;
+            for (parent, child, _, child_size) in &edges {
                 if *child_size >= min_cluster_size {
-                    relabel[*child] = next_label;
+                    label[*child] = next_label;
                     next_label += 1;
                 } else {
-                    relabel[*child] = relabel[*parent];
+                    label[*child] = label[*parent];
                 }
             }
         } else {
             // If there is only one cluster, parent cluster is shrinking,
             // so we keep the parent's label for all children:
             for (parent, child, _, _) in &edges {
-                relabel[*child] = relabel[*parent];
-                relevel[*child] = relevel[*parent];
+                label[*child] = label[*parent];
+            }
+        }
+
+        // Update the lambda value for the parent cluster
+        let mut num_points = 0;
+        for (_, child, eps, child_size) in &edges {
+            num_points += *child_size;
+            if num_points >= min_cluster_size {
+                lambda[parent] = if *eps > A::zero() {
+                    A::one() / *eps
+                } else {
+                    A::max_value()
+                };
+            }
+            if *child_size >= min_cluster_size {
+                lambda[*child] = if *eps > A::zero() {
+                    A::one() / *eps
+                } else {
+                    A::max_value()
+                };
+            }
+        }
+        for (_, child, _, child_size) in &edges {
+            if *child_size < min_cluster_size {
+                lambda[*child] = lambda[parent];
             }
         }
 
         // Add the edges to the result with the new labels:
-        for (parent, child, _, child_size) in edges {
-            let lambda = if relevel[*child] > A::zero() {
-                A::one() / relevel[*child]
-            } else {
-                A::max_value()
-            };
+        for (_, child, _, child_size) in edges {
             if *child_size == 1 {
-                result.push((relabel[*parent], *child, lambda, *child_size));
-            } else if relabel[*child] != relabel[*parent] {
-                result.push((relabel[*parent], relabel[*child], lambda, *child_size));
+                result.push((label[parent], *child, lambda[*child], *child_size));
+            } else if label[*child] != label[parent] {
+                result.push((label[parent], label[*child], lambda[*child], *child_size));
             }
         }
-
-        println!("Relabeling: {:?}", relabel);
-        println!("Releveling: {:?}\n", relevel);
     }
 
     println!("\nCondensedMST (minClSize = {min_cluster_size}):");
@@ -565,56 +583,50 @@ mod test {
     #[test]
     fn condense_mst() {
         // Given the following hierarchy of 7 points:
-        //             14
-        //           /    \
-        //         13       12
-        //        /  \      / \
-        //       11   9    10  7
-        //       /|   |\   |\
-        //      8 2   3 4  5 6
-        //     /|
-        //    0 1
+        //             12
+        //           /    \        <-- eps = 8.0
+        //         10       11
+        //        /  \      / \    <-- eps = 4.0
+        //       7    8    9   6
+        //      /|    |\   |\      <-- eps = 2.0
+        //     0 1    2 3  4 5
 
         let mst = vec![
-            (8, 0, 4., 1),
-            (8, 1, 4., 1),
-            (9, 3, 4., 1),
-            (9, 4, 4., 1),
-            (10, 5, 4., 1),
-            (10, 6, 4., 1),
-            (11, 8, 5., 2),
-            (11, 2, 5., 1),
-            (12, 10, 6., 2),
-            (12, 7, 6., 1),
-            (13, 11, 7., 3),
-            (13, 9, 7., 2),
-            (14, 13, 9., 5),
-            (14, 12, 9., 3),
+            (7, 0, 2., 1),
+            (7, 1, 2., 1),
+            (8, 2, 2., 1),
+            (8, 3, 2., 1),
+            (9, 4, 2., 1),
+            (9, 5, 2., 1),
+            (10, 7, 4., 2),
+            (10, 8, 4., 2),
+            (11, 9, 4., 2),
+            (11, 6, 4., 1),
+            (12, 10, 8., 4),
+            (12, 11, 8., 3),
         ];
         let min_cluster_size = 3;
 
         // Condense the MST based on the minimum cluster size = 3:
-        //              8
-        //           /    \
-        //         10       9
-        //        / \\     /|\
-        //       10 3 4   5 6 7
-        //      /|\
-        //     0 1 2
+        //             7
+        //           /   \
+        //         9       8
+        //       // \\    /|\
+        //      0 1 3 4  4 5 6
+
         let condensed = super::condense_mst(mst, min_cluster_size);
         assert_eq!(
             condensed,
             vec![
-                (8, 9, 1. / 9., 3),
-                (8, 10, 1. / 9., 5),
-                (10, 4, 1. / 7., 1),
-                (10, 3, 1. / 7., 1),
-                (9, 7, 1. / 6., 1),
-                (9, 5, 1. / 6., 1),
-                (9, 6, 1. / 6., 1),
-                (10, 2, 1. / 5., 1),
-                (10, 1, 1. / 5., 1),
-                (10, 0, 1. / 5., 1),
+                (7, 8, 1. / 8., 3),
+                (7, 9, 1. / 8., 4),
+                (8, 6, 1. / 4., 1),
+                (8, 5, 1. / 4., 1),
+                (8, 4, 1. / 4., 1),
+                (9, 3, 1. / 4., 1),
+                (9, 2, 1. / 4., 1),
+                (9, 1, 1. / 4., 1),
+                (9, 0, 1. / 4., 1),
             ]
         );
     }
