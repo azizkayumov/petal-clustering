@@ -133,65 +133,71 @@ pub fn condense_mst<A: FloatCore + Div + Debug>(
 
     // Top down pass to relabel the nodes w.r.t. the minimum cluster size
     let mut next_label: usize = n + 1;
-    for (parent, edges) in &mst.iter().rev().chunk_by(|(parent, _, _, _)| *parent) {
-        let edges = edges.collect::<Vec<_>>();
+    for ((parent, eps), edges) in &mst
+        .iter()
+        .rev()
+        .chunk_by(|(parent, _, eps, _)| (*parent, *eps))
+    {
+        let edges = edges
+            .map(|(_, child, _, child_size)| (*child, *child_size))
+            .collect::<Vec<_>>();
 
         let num_new_clusters = edges
             .iter()
-            .filter(|(_, _, _, child_size)| *child_size >= min_cluster_size)
+            .filter(|(_, child_size)| *child_size >= min_cluster_size)
             .count();
 
         // Assigning new labels to the children based on the minimum cluster size
         if num_new_clusters > 1 {
             // If there are more than one cluster, parent cluster is splitting,
             // so we need to assign new labels to the children:
-            for (parent, child, _, child_size) in &edges {
+            for (child, child_size) in &edges {
                 if *child_size >= min_cluster_size {
                     label[*child] = next_label;
                     next_label += 1;
                 } else {
-                    label[*child] = label[*parent];
+                    label[*child] = label[parent];
                 }
             }
         } else {
             // If there is only one cluster, parent cluster is shrinking,
             // so we keep the parent's label for all children:
-            for (parent, child, _, _) in &edges {
-                label[*child] = label[*parent];
+            for (child, _) in &edges {
+                label[*child] = label[parent];
             }
         }
 
         // Update the lambda value for the parent cluster
         let mut num_points = 0;
-        for (_, child, eps, child_size) in &edges {
+        for (child, child_size) in &edges {
             num_points += *child_size;
-            if num_points >= min_cluster_size {
-                lambda[parent] = if *eps > A::zero() {
-                    A::one() / *eps
-                } else {
-                    A::max_value()
-                };
-            }
             if *child_size >= min_cluster_size {
-                lambda[*child] = if *eps > A::zero() {
-                    A::one() / *eps
+                lambda[*child] = if eps > A::zero() {
+                    A::one() / eps
                 } else {
                     A::max_value()
                 };
             }
         }
-        for (_, child, _, child_size) in &edges {
+        if num_points >= min_cluster_size {
+            lambda[parent] = if eps > A::zero() {
+                A::one() / eps
+            } else {
+                A::max_value()
+            };
+        }
+        for (child, child_size) in &edges {
             if *child_size < min_cluster_size {
                 lambda[*child] = lambda[parent];
             }
         }
 
         // Add the edges to the result with the new labels:
-        for (_, child, _, child_size) in edges {
-            if *child_size == 1 {
-                result.push((label[parent], *child, lambda[*child], *child_size));
-            } else if label[*child] != label[parent] {
-                result.push((label[parent], label[*child], lambda[*child], *child_size));
+        for (child, child_size) in edges {
+            if child_size == 1 {
+                result.push((label[parent], child, lambda[child], child_size));
+            } else if label[child] != label[parent] {
+                result.push((label[parent], label[child], lambda[child], child_size));
             }
         }
     }
