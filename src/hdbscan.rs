@@ -21,7 +21,7 @@ use crate::union_find::TreeUnionFind;
 /// ```
 /// use ndarray::array;
 /// use petal_neighbors::distance::Euclidean;
-/// use petal_clustering::{HDbscan, Fit};
+/// use petal_clustering::{HDbscan, Fit, ClusterExtraction};
 ///
 /// let points = array![
 ///             [1.0, 2.0],
@@ -37,6 +37,7 @@ use crate::union_find::TreeUnionFind;
 ///    min_cluster_size: 2,
 ///    metric: Euclidean::default(),
 ///    boruvka: false,
+///    extraction: ClusterExtraction::ExcessOfMass,
 /// };
 /// let (clusters, noise, _outlier_scores) = hdbscan.fit(&points, None);
 /// assert_eq!(clusters.len(), 2);   // two clusters found
@@ -55,6 +56,7 @@ pub struct HDbscan<A, M> {
     pub min_cluster_size: usize,
     pub metric: M,
     pub boruvka: bool,
+    pub extraction: ClusterExtraction,
 }
 
 impl<A> Default for HDbscan<A, Euclidean>
@@ -68,8 +70,28 @@ where
             min_cluster_size: 15,
             metric: Euclidean::default(),
             boruvka: true,
+            extraction: ClusterExtraction::ExcessOfMass,
         }
     }
+}
+
+/// The cluster extraction method used in HDBSCAN.
+/// - `ExcessOfMass`: Unsupervised clustering using Excess of Mass (`EoM`) algorithm.
+/// - `Fbcubed`: Semi-supervised clustering using F-BCubed (`FBC`) algorithm.
+/// - `Mixed`: Semi-supervised clustering using a mixture of `EoM` and `FBC` algorithms.
+/// - `Classification`: Semi-supervised classification using the partially labeled data.
+///
+/// # References
+/// - Campello, Ricardo JGB, et al. "Hierarchical density estimates for data clustering, visualization, and outlier detection."
+///   ACM Transactions on Knowledge Discovery from Data (TKDD) 10.1 (2015): 1-51.
+/// - Castro Gertrudes, Jadson, et al. "A unified view of density-based methods for semi-supervised clustering and classification."
+///   Data mining and knowledge discovery 33.6 (2019): 1894-1952.
+#[derive(Debug, Deserialize, Serialize, Clone, Copy)]
+pub enum ClusterExtraction {
+    ExcessOfMass,
+    Fbcubed,
+    Mixed,
+    Classification,
 }
 
 /// Fits the HDBSCAN clustering algorithm to the given input data.
@@ -146,7 +168,11 @@ where
         let labeled = label(&mst);
         let condensed = condense_mst(&labeled, self.min_cluster_size);
         let outlier_scores = glosh(&condensed, self.min_cluster_size);
-        let (clusters, noise) = find_clusters(&Array1::from_vec(condensed).view(), partial_labels);
+        let (clusters, noise) = find_clusters(
+            &Array1::from_vec(condensed).view(),
+            partial_labels,
+            self.extraction,
+        );
         (clusters, noise, outlier_scores)
     }
 }
@@ -301,6 +327,7 @@ fn get_bcubed<A: FloatCore + FromPrimitive + AddAssign + Sub>(
 fn find_clusters<A: FloatCore + FromPrimitive + AddAssign + Sub>(
     condensed_tree: &ArrayView1<(usize, usize, A, usize)>,
     partial_labels: Option<&HashMap<usize, Vec<usize>>>,
+    extraction: ClusterExtraction,
 ) -> (HashMap<usize, Vec<usize>>, Vec<usize>) {
     let mut stability = get_stability(condensed_tree);
     let mut bcubed = if let Some(partial_labels) = partial_labels {
@@ -344,10 +371,22 @@ fn find_clusters<A: FloatCore + FromPrimitive + AddAssign + Sub>(
 
         stability.entry(*node).and_modify(|node_stability| {
             let node_bcubed = bcubed.entry(*node).or_insert(A::zero());
-            // ties are broken by stability
-            if *node_bcubed > subtree_bcubed
-                || (*node_bcubed == subtree_bcubed && *node_stability >= subtree_stability)
-            {
+
+            let select_node = match extraction {
+                ClusterExtraction::ExcessOfMass => *node_stability >= subtree_stability,
+                ClusterExtraction::Fbcubed => {
+                    // works with fbcubed scores of clusters
+                    // where ties are broken by stability
+                    *node_bcubed > subtree_bcubed
+                        || (*node_bcubed == subtree_bcubed && *node_stability >= subtree_stability)
+                }
+                _ => {
+                    // not implemented yet
+                    panic!("Unsupported cluster extraction method: {extraction:?}");
+                }
+            };
+
+            if select_node {
                 clusters[*node] = Some(*node);
             }
             *node_bcubed = node_bcubed.max(subtree_bcubed);
@@ -486,6 +525,7 @@ mod test {
             min_cluster_size: 2,
             metric: Euclidean::default(),
             boruvka: false,
+            extraction: super::ClusterExtraction::ExcessOfMass,
         };
         let (clusters, noise, _) = hdbscan.fit(&data, None);
         assert_eq!(clusters.len(), 2);
@@ -516,6 +556,7 @@ mod test {
             min_cluster_size: 2,
             metric: Euclidean::default(),
             boruvka: false,
+            extraction: super::ClusterExtraction::ExcessOfMass,
         };
         let (clusters, noise, _) = hdbscan.fit(&data, None);
         assert_eq!(clusters.len(), 2);
@@ -564,6 +605,7 @@ mod test {
             min_cluster_size: 5,
             metric: Euclidean::default(),
             boruvka: true,
+            extraction: super::ClusterExtraction::ExcessOfMass,
         };
         let (_, _, outlier_scores) = hdbscan.fit(&data, None);
 
@@ -630,6 +672,7 @@ mod test {
             min_cluster_size: 4,
             metric: Euclidean::default(),
             boruvka: false,
+            extraction: super::ClusterExtraction::Fbcubed,
             ..Default::default()
         };
 

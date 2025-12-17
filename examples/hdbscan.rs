@@ -39,6 +39,7 @@ fn main() {
         min_cluster_size,
         metric: Euclidean::default(),
         boruvka: true,
+        extraction: petal_clustering::ClusterExtraction::ExcessOfMass,
     };
     let (clusters, noise, outlier_scores) = clustering.fit(&data.view(), None);
     println!("========= Report =========");
