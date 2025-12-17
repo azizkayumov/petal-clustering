@@ -78,8 +78,9 @@ where
 /// The cluster extraction method used in HDBSCAN.
 /// - `ExcessOfMass`: Unsupervised clustering using Excess of Mass (`EoM`) algorithm.
 /// - `Fbcubed`: Semi-supervised clustering using F-BCubed (`FBC`) algorithm.
-/// - `Mixed`: Semi-supervised clustering using a mixture of `EoM` and `FBC` algorithms.
-/// - `Classification`: Semi-supervised classification using the partially labeled data.
+///
+/// # Notes
+/// - `Fbcubed` switches to `ExcessOfMass` when no partial labels are provided.
 ///
 /// # References
 /// - Campello, Ricardo JGB, et al. "Hierarchical density estimates for data clustering, visualization, and outlier detection."
@@ -90,8 +91,6 @@ where
 pub enum ClusterExtraction {
     ExcessOfMass,
     Fbcubed,
-    Mixed,
-    Classification,
 }
 
 /// Fits the HDBSCAN clustering algorithm to the given input data.
@@ -379,10 +378,6 @@ fn find_clusters<A: FloatCore + FromPrimitive + AddAssign + Sub>(
                     // where ties are broken by stability
                     *node_bcubed > subtree_bcubed
                         || (*node_bcubed == subtree_bcubed && *node_stability >= subtree_stability)
-                }
-                _ => {
-                    // not implemented yet
-                    panic!("Unsupported cluster extraction method: {extraction:?}");
                 }
             };
 
