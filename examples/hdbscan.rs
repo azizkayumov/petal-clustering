@@ -2,7 +2,7 @@ use std::{env, fs::File, process::exit};
 
 use csv::ReaderBuilder;
 use ndarray::Array2;
-use petal_clustering::{Fit, HDbscan};
+use petal_clustering::{Fit, HDbscan, ClusterExtraction};
 use petal_neighbors::distance::Euclidean;
 
 fn main() {
@@ -39,7 +39,7 @@ fn main() {
         min_cluster_size,
         metric: Euclidean::default(),
         boruvka: true,
-        extraction: petal_clustering::ClusterExtraction::ExcessOfMass,
+        extraction: ClusterExtraction::ExcessOfMass,
     };
     let (clusters, noise, outlier_scores) = clustering.fit(&data.view(), None);
     println!("========= Report =========");
