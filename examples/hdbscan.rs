@@ -2,7 +2,7 @@ use std::{env, fs::File, process::exit};
 
 use csv::ReaderBuilder;
 use ndarray::Array2;
-use petal_clustering::{Fit, HDbscan, ClusterExtraction};
+use petal_clustering::{ClusterExtraction, Fit, HDbscan};
 use petal_neighbors::distance::Euclidean;
 
 fn main() {
