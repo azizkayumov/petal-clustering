@@ -683,7 +683,7 @@ mod test {
 
         // Empty partial labels (should return the same result as unsupervised clustering)
         let partial_labels: HashMap<usize, Vec<usize>> = HashMap::new();
-        let (answer, noise, _) = hdbscan.fit(&data, Some(&partial_labels));
+        let (answer, noise, _) = hdbscan.fit_with_labels(&data, &partial_labels);
         assert_eq!(answer, clusters);
         assert_eq!(noise, [15]);
 
@@ -693,7 +693,7 @@ mod test {
         partial_labels.insert(1, vec![3, 4]);
         partial_labels.insert(2, vec![6]);
         partial_labels.insert(3, vec![11]);
-        let (clusters, noise, _) = hdbscan.fit(&data, Some(&partial_labels));
+        let (clusters, noise, _) = hdbscan.fit_with_labels(&data, &partial_labels);
         assert_eq!(clusters.len(), 3); // 3 clusters found
         assert_eq!(noise, [15]); // 1 outlier found
         let c1 = clusters.keys().find(|k| clusters[k].contains(&0)).unwrap();
